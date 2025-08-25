@@ -1,9 +1,11 @@
 name: Build All & Release
+
 on:
   push:
-    branches: [master, release/*, test/git-actions]
+    branches:
+      - '**'
     tags:
-      - v*
+      - 'v*'
 
 jobs:
   linux-bin-and-snap-release:
@@ -12,7 +14,6 @@ jobs:
       SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
       UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
       UNSPLASH_CLIENT_ID: ${{ secrets.UNSPLASH_CLIENT_ID }}
-
     steps:
       - uses: actions/setup-node@v3
         with:
@@ -21,44 +22,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # work around for npm installs from git+https://github.com/johannesjo/J2M.git
       - name: Reconfigure git to use HTTP authentication
-        run: >
-          git config --global url."https://github.com/".insteadOf
-          ssh://git@github.com/
-
+        run: |
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
       - name: Get npm cache directory
         id: npm-cache-dir
-        run: |
-          echo "::set-output name=dir::$(npm config get cache)"
+        run: echo "::set-output name=dir::$(npm config get cache)"
       - uses: actions/cache@v4
-        id: npm-cache # use this to check for `cache-hit` ==> if: steps.npm-cache.outputs.cache-hit != 'true'
+        id: npm-cache
         with:
           path: ${{ steps.npm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-
       - name: Install npm Packages
-        #  if: steps.npm-cache.outputs.cache-hit != 'true'
-        run: npm i
-
+        run: npm install
       - name: Install Playwright Browsers
         run: |
           npx playwright install --with-deps chromium
           npx playwright install-deps chromium
-
-      - run: npm run env # Generate env.generated.ts
-
+      - run: npm run env
       - name: Lint
         run: npm run lint:ci
-
       - name: Test Unit
         run: npm run test
-
       - name: Test E2E
         run: npm run e2e
-
       - name: 'Upload E2E results on failure'
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
@@ -66,34 +55,21 @@ jobs:
           name: e2eResults
           path: .tmp/e2e-test-results/**/*.*
           retention-days: 14
-
       - name: Build Frontend & Electron
         run: npm run build
-
       - name: Install Snapcraft
         uses: samuelmeuli/action-snapcraft@v3
-
       - name: Build/Release Electron app
         uses: johannesjo/action-electron-builder@v1
         with:
           build_script_name: empty
           github_token: ${{ secrets.github_token }}
           release: ${{ startsWith(github.ref, 'refs/tags/v') }}
-
-      # rename to possibly fix release issue
-      - run: find ./.tmp/app-builds -type f -name '*.snap' -exec sh -c 'x="{}"; mv "$x" ".tmp/app-builds/sp.snap"' \;
-      # Release to edge if no tag and to candidate if tag
-      - #otherwise it would be executed twice
-        if: false == startsWith(github.ref, 'refs/tags/v')
-        uses: nick-fields/retry@v3
-        with:
-          max_attempts: 2
-          timeout_minutes: 11
-          command: snapcraft push .tmp/app-builds/sp.snap --release edge
-      #      - run: snapcraft push .tmp/app-builds/sp.snap --release candidate
-      #        if: startsWith(github.ref, 'refs/tags/v')
-  #      - run: snapcraft promote superproductivity --from-channel latest/edge --to-channel latest/candidate --yes
-  #        if: startsWith(github.ref, 'refs/tags/v')
+      - run: |
+          find ./.tmp/app-builds -type f -name '*.snap' -exec sh -c '
+            x="{}"
+            mv "$x" ".tmp/app-builds/sp.snap"
+          ' \;
 
   mac-bin:
     runs-on: macos-latest
@@ -101,76 +77,47 @@ jobs:
     env:
       UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
       UNSPLASH_CLIENT_ID: ${{ secrets.UNSPLASH_CLIENT_ID }}
-
     steps:
       - uses: actions/setup-node@v3
         with:
           node-version: 20
       - name: Echo is Release
-        run: echo "IS_RELEASE $IS_RELEASE, ${{ startsWith(github.ref, 'refs/tags/v') }}"
-        env:
-          IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
-
+        run: echo "IS_RELEASE ${{ startsWith(github.ref, 'refs/tags/v') }}"
       - name: Check out Git repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # work around for npm installs from git+https://github.com/johannesjo/J2M.git
       - name: Reconfigure git to use HTTP authentication
-        run: >
-          git config --global url."https://github.com/".insteadOf
-          ssh://git@github.com/
-
+        run: |
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
       - name: Get npm cache directory
         id: npm-cache-dir
-        run: |
-          echo "::set-output name=dir::$(npm config get cache)"
+        run: echo "::set-output name=dir::$(npm config get cache)"
       - uses: actions/cache@v4
-        id: npm-cache # use this to check for `cache-hit` ==> if: steps.npm-cache.outputs.cache-hit != 'true'
+        id: npm-cache
         with:
           path: ${{ steps.npm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-
       - name: Workaround for nx issue and dmg licence issue
         run: npm install @nx/nx-darwin-arm64 dmg-license
-
       - name: Install npm Packages
-        #  if: steps.npm-cache.outputs.cache-hit != 'true'
-        run: npm i
-
-      - run: 'echo "$PROVISION_PROFILE" | base64 --decode > embedded.provisionprofile'
-        shell: bash
-        env:
-          PROVISION_PROFILE: ${{secrets.dl_provision_profile}}
-
+        run: npm install
+      - name: Decode provisioning profile
+        run: |
+          echo "${{ secrets.dl_provision_profile }}" | base64 --decode > embedded.provisionprofile
       - name: Prepare for app notarization
-        # Import Apple API key for app notarization on macOS
         run: |
           mkdir -p ~/private_keys/
-          echo '${{ secrets.mac_api_key }}' > ~/private_keys/AuthKey_${{ secrets.mac_api_key_id }}.p8
-
-      - run: npm run env # Generate env.generated.ts
-
+          echo "${{ secrets.mac_api_key }}" > ~/private_keys/AuthKey_${{ secrets.mac_api_key_id }}.p8
+      - run: npm run env
       - name: Lint
         run: npm run lint:ci
-
       - name: Test Unit
         run: npm run test
-
-      #      - uses: browser-actions/setup-chrome@v1
-      #        id: setup-chrome
-      #      - run: |
-      #          echo Installed chromium version: ${{ steps.setup-chrome.outputs.chrome-version }}
-      #          ${{ steps.setup-chrome.outputs.chrome-path }} --version
-      # Disabled because not working atm: https://github.com/johannesjo/super-productivity/actions/runs/5924016145/job/16060737982
-      #      - name: Test E2E
-      #        run: npm run e2e
-
       - name: Build Frontend & Electron
         run: npm run build
-
       - name: Build/Release Electron app
         uses: johannesjo/action-electron-builder@v1
         with:
@@ -179,7 +126,6 @@ jobs:
           mac_certs: ${{ secrets.mac_certs }}
           mac_certs_password: ${{ secrets.mac_certs_password }}
           release: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          # macOS notarization API key
         env:
           API_KEY_ID: ${{ secrets.mac_api_key_id }}
           API_KEY_ISSUER_ID: ${{ secrets.mac_api_key_issuer_id }}
@@ -189,64 +135,50 @@ jobs:
 
   windows-bin:
     runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    env:
-      UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
-      UNSPLASH_CLIENT_ID: ${{ secrets.UNSPLASH_CLIENT_ID }}
-
     steps:
       - uses: actions/setup-node@v3
         with:
           node-version: 20
-      # required because setting via env.TZ does not work on windows
       - name: Set timezone to Europe Standard Time
         uses: szenius/set-timezone@v2.0
         with:
           timezoneWindows: 'W. Europe Standard Time'
-
       - name: Check out Git repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # work around for npm installs from git+https://github.com/johannesjo/J2M.git
       - name: Reconfigure git to use HTTP authentication
-        run: >
-          git config --global url."https://github.com/".insteadOf
-          ssh://git@github.com/
-
+        run: |
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
       - name: Get npm cache directory
         id: npm-cache-dir
-        run: |
-          echo "::set-output name=dir::$(npm config get cache)"
+        run: echo "::set-output name=dir::$(npm config get cache)"
       - uses: actions/cache@v4
-        id: npm-cache # use this to check for `cache-hit` ==> if: steps.npm-cache.outputs.cache-hit != 'true'
+        id: npm-cache
         with:
           path: ${{ steps.npm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-
       - name: Workaround for nx issue
         run: npm install @nx/nx-win32-x64-msvc
-
       - name: Install npm Packages
-        #  if: steps.npm-cache.outputs.cache-hit != 'true'
-        run: npm i
-
-      - run: npm run env # Generate env.generated.ts
-
+        run: npm install
+      - run: npm run env
       - name: Lint
         run: npm run lint:ci
-
       - name: Test Unit
         run: npm run test
-
       - name: Build Frontend & Electron
         run: npm run build
-
       - name: Build/Release Electron app
         uses: johannesjo/action-electron-builder@v1
         with:
           build_script_name: empty
           github_token: ${{ secrets.github_token }}
-          release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          release: true
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: super-productivity-win
+          path: .tmp/app-builds/*.exe
