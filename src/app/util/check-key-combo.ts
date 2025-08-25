@@ -1,3 +1,5 @@
+import { getKeyCode } from './key-code-map';
+
 const isSpecialKeyExactlyRight = (
   isKeyRequired: boolean,
   isKeyPressed: boolean,
@@ -18,12 +20,15 @@ export const checkKeyCombo = (
 
     sk.splice(-1, 1);
 
+    // Use centralized key code mapping for international layout support
+    const expectedCode = getKeyCode(standardKey);
+
     return (
       isSpecialKeyExactlyRight(sk.includes('Ctrl'), ev.ctrlKey) &&
       isSpecialKeyExactlyRight(sk.includes('Alt'), ev.altKey) &&
       isSpecialKeyExactlyRight(sk.includes('Meta'), ev.metaKey) &&
       (!sk.includes('Shift') || ev.shiftKey) &&
-      (ev.key === standardKey || (isPlusKey && ev.key === '+'))
+      (ev.code === expectedCode || (isPlusKey && ev.key === '+'))
     );
   }
   return false;
